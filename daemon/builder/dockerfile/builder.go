@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/containerd/log"
 	"github.com/containerd/platforms"
@@ -89,6 +90,7 @@ func (bm *BuildManager) Build(ctx context.Context, config buildbackend.BuildConf
 		Backend:        bm.backend,
 		PathCache:      bm.pathCache,
 		IDMapping:      bm.idMapping,
+		EventSink:      config.EventSink,
 	})
 	if err != nil {
 		return nil, err
@@ -103,6 +105,7 @@ type builderOptions struct {
 	ProgressWriter buildbackend.ProgressWriter
 	PathCache      pathCache
 	IDMapping      user.IdentityMapping
+	EventSink      build.EventSink
 }
 
 // Builder is a Dockerfile builder
@@ -124,6 +127,13 @@ type Builder struct {
 	containerManager *containerManager
 	imageProber      ImageProber
 	platform         *ocispec.Platform
+
+	// eventSink receives stable per-step build summary events; nil disables
+	// them. stepCached records whether the most recent step was served from
+	// cache; it is set by probeCache and read (and reset) by the dispatch
+	// loop right after each instruction is handled.
+	eventSink  build.EventSink
+	stepCached bool
 }
 
 // newBuilder creates a new Dockerfile builder from an optional dockerfile and a Options.
@@ -150,6 +160,7 @@ func newBuilder(ctx context.Context, options builderOptions) (*Builder, error) {
 		pathCache:        options.PathCache,
 		imageProber:      imgProber,
 		containerManager: newContainerManager(options.Backend),
+		eventSink:        options.EventSink,
 	}
 
 	// same as in Builder.Build in builder/builder-next/builder.go
@@ -246,6 +257,38 @@ func printCommand(out io.Writer, currentCommandIndex int, totalCommands int, cmd
 	return currentCommandIndex + 1
 }
 
+// recordStep emits a phase-done summary event for the step that just ran.
+// It never writes to the build output and is a no-op when no event sink is
+// configured, so legacy builds keep their exact response.
+func (b *Builder) recordStep(number int, stageName string, cmd instructions.Command, duration time.Duration, stepErr error, layerDigest string) {
+	if b.eventSink == nil {
+		return
+	}
+	// String() is provided by the embedded withNameAndCode of the concrete
+	// instruction types but is not part of the Command interface.
+	var command string
+	if c, ok := cmd.(interface{ String() string }); ok {
+		command = c.String()
+	}
+	phase := build.PhaseSummary{
+		Phase:               build.PhaseStep,
+		Number:              number,
+		Stage:               stageName,
+		Command:             build.TruncateText(command),
+		Cached:              b.stepCached,
+		DurationNanoseconds: duration.Nanoseconds(),
+		LayerDigest:         layerDigest,
+	}
+	if stepErr != nil {
+		phase.Error = build.TruncateText(stepErr.Error())
+	}
+	b.eventSink.Send(build.SummaryEvent{
+		Type:      build.SummaryEventPhaseDone,
+		Timestamp: time.Now().UTC(),
+		Phase:     &phase,
+	})
+}
+
 func (b *Builder) dispatchDockerfileWithCancellation(ctx context.Context, parseResult []instructions.Stage, metaArgs []instructions.ArgCommand, escapeToken rune, source builder.Source) (*dispatchState, error) {
 	request := dispatchRequest{}
 	buildArgs := NewBuildArgs(b.options.BuildArgs)
@@ -292,8 +335,12 @@ func (b *Builder) dispatchDockerfileWithCancellation(ctx context.Context, parseR
 
 			currentCommandIndex = printCommand(b.Stdout, currentCommandIndex, totalCommands, cmd)
 
-			if err := dispatch(ctx, request, cmd); err != nil {
-				return nil, err
+			stepStart := time.Now()
+			b.stepCached = false
+			stepErr := dispatch(ctx, request, cmd)
+			b.recordStep(currentCommandIndex-1, stage.Name, cmd, time.Since(stepStart), stepErr, request.state.imageID)
+			if stepErr != nil {
+				return nil, stepErr
 			}
 			request.state.updateRunConfig()
 			_, _ = fmt.Fprintf(b.Stdout, " ---> %s\n", stringid.TruncateID(request.state.imageID))

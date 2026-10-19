@@ -35,11 +35,18 @@ type Backend struct {
 	imageComponent ImageComponent
 	buildkit       *buildkit.Builder
 	eventsService  *daemonevents.Events
+	buildEvents    *builder.EventHub
 }
 
 // NewBackend creates a new build backend from components
-func NewBackend(components ImageComponent, builder Builder, buildkit *buildkit.Builder, es *daemonevents.Events) (*Backend, error) {
-	return &Backend{imageComponent: components, builder: builder, buildkit: buildkit, eventsService: es}, nil
+func NewBackend(components ImageComponent, bld Builder, buildkit *buildkit.Builder, es *daemonevents.Events) (*Backend, error) {
+	return &Backend{
+		imageComponent: components,
+		builder:        bld,
+		buildkit:       buildkit,
+		eventsService:  es,
+		buildEvents:    builder.NewEventHub(),
+	}, nil
 }
 
 // RegisterGRPC registers buildkit controller to the grpc server.
@@ -49,10 +56,34 @@ func (b *Backend) RegisterGRPC(s *grpc.Server) {
 	}
 }
 
+// SubscribeBuildEvents subscribes to the stable build summary event stream
+// (build-started / phase-done / build-done) of a single build. An empty
+// buildID subscribes to all builds. The returned channel is closed when the
+// cancel function is called. A slow or disconnected subscriber never blocks
+// a build: overflowing events are dropped.
+func (b *Backend) SubscribeBuildEvents(buildID string) (<-chan build.SummaryEvent, func()) {
+	return b.buildEvents.Subscribe(buildID)
+}
+
 // Build builds an image from a Source
-func (b *Backend) Build(ctx context.Context, config buildbackend.BuildConfig) (string, error) {
+func (b *Backend) Build(ctx context.Context, config buildbackend.BuildConfig) (imageID string, retErr error) {
 	options := config.Options
 	useBuildKit := options.Version == build.BuilderBuildKit
+
+	buildID := options.BuildID
+	if buildID == "" {
+		buildID = stringid.GenerateRandomID()
+	}
+	recorder := builder.NewRecorder(buildID, b.buildEvents.Sink(buildID))
+	recorder.Start()
+	defer func() {
+		recorder.Finish(imageID, retErr)
+	}()
+
+	// Route the summary event stream through the per-build recorder so both
+	// builder implementations and callers that set their own sink are
+	// aggregated consistently.
+	config.EventSink = recorder
 
 	tags, err := sanitizeRepoAndTags(options.Tags)
 	if err != nil {
@@ -76,7 +107,7 @@ func (b *Backend) Build(ctx context.Context, config buildbackend.BuildConfig) (s
 		return "", nil
 	}
 
-	imageID := buildResult.ImageID
+	imageID = buildResult.ImageID
 	if options.Squash {
 		if imageID, err = squashBuild(buildResult, b.imageComponent); err != nil {
 			return "", err

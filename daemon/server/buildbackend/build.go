@@ -57,6 +57,11 @@ type BuildConfig struct {
 	Source         io.ReadCloser
 	ProgressWriter ProgressWriter
 	Options        *BuildOptions
+	// EventSink, when set, receives the stable build summary event stream
+	// (build-started / phase-done / build-done). It must not block; a nil
+	// sink disables summary events and leaves the legacy build output
+	// unchanged.
+	EventSink build.EventSink
 }
 
 // BuildOptions holds the information

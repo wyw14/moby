@@ -323,10 +323,12 @@ func getShell(c *container.Config, os string) []string {
 func (b *Builder) probeCache(dispatchState *dispatchState, runConfig *container.Config) (bool, error) {
 	cachedID, err := b.imageProber.Probe(dispatchState.imageID, runConfig, b.getPlatform(dispatchState))
 	if cachedID == "" || err != nil {
+		b.stepCached = false
 		return false, err
 	}
 	_, _ = fmt.Fprintln(b.Stdout, " ---> Using cache")
 
+	b.stepCached = true
 	dispatchState.imageID = cachedID
 	return true, nil
 }
