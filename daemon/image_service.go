@@ -41,6 +41,7 @@ type ImageService interface {
 	TagImage(ctx context.Context, imageID image.ID, newTag reference.Named) error
 	GetImage(ctx context.Context, refOrID string, options imagebackend.GetImageOpts) (*image.Image, error)
 	ImageHistory(ctx context.Context, name string, platform *ocispec.Platform) ([]*imagetype.HistoryResponseItem, error)
+	ImageLayerMetadata(ctx context.Context, name string, platform *ocispec.Platform) ([]imagetype.LayerMetadata, error)
 	CommitImage(ctx context.Context, c backend.CommitConfig) (image.ID, error)
 	SquashImage(id, parent string) (string, error)
 	ImageInspect(ctx context.Context, refOrID string, opts imagebackend.ImageInspectOpts) (*imagebackend.InspectData, error)

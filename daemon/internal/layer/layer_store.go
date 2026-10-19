@@ -389,6 +389,22 @@ func (ls *layerStore) Map() map[ChainID]Layer {
 	return layers
 }
 
+// Descriptor returns the distribution descriptor stored for the layer.
+// It does not retain a reference on the layer and never downloads or
+// registers layer content. A zero descriptor without an error is returned
+// when no descriptor is stored for the layer.
+func (ls *layerStore) Descriptor(id ChainID) (distribution.Descriptor, error) {
+	ls.layerL.Lock()
+	l, ok := ls.layerMap[id]
+	ls.layerL.Unlock()
+	if ok {
+		return l.descriptor, nil
+	}
+	// The layer is not loaded (for example because its content is missing
+	// locally); read the persisted descriptor metadata directly.
+	return ls.store.GetDescriptor(id)
+}
+
 func (ls *layerStore) deleteLayer(layer *roLayer, metadata *Metadata) error {
 	// Rename layer digest folder first so we detect orphan layer(s)
 	// if ls.driver.Remove fails

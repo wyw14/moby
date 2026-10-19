@@ -15,6 +15,18 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.57 API changes
 
+* `GET /images/{name}/layers` is a new endpoint that exports the locally
+  stored metadata of an image's layers as a stable JSON array. Each entry
+  contains the layer's compressed `Digest`, `Parent` chain ID, compressed
+  `MediaType`, `Created` time, and the `SourceRepositories` it was pulled
+  from, along with the local `DiffID`, `ChainID`, and an `Available` flag.
+  The operation is read-only: it never pulls missing layers or modifies
+  local images. Layers sharing a compressed digest are merged into a single
+  entry while all source-repository references are preserved. The optional
+  `platform` query parameter selects a specific image variant, similar to
+  `GET /images/{name}/history`. This endpoint is not supported by the
+  containerd image store and returns `501 Not Implemented` in that case.
+
 ## v1.56 API changes
 
 * `GET /containers/json` now supports an `annotation` filter to filter

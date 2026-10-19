@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 
 	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/v2/daemon/internal/layer"
@@ -16,6 +17,11 @@ import (
 // the layer.
 type V2MetadataService interface {
 	GetMetadata(diffID layer.DiffID) ([]V2Metadata, error)
+	// LookupMetadata is a tolerant variant of GetMetadata for read-only
+	// consumers: a missing metadata entry or a legacy metadata file that
+	// cannot be parsed results in no entries rather than an error. Access
+	// errors (for example permission denied) are returned to the caller.
+	LookupMetadata(diffID layer.DiffID) ([]V2Metadata, error)
 	GetDiffID(dgst digest.Digest) (layer.DiffID, error)
 	Add(diffID layer.DiffID, metadata V2Metadata) error
 	TagAndAdd(diffID layer.DiffID, hmacKey []byte, metadata V2Metadata) error
@@ -139,6 +145,44 @@ func (serv *v2MetadataService) GetMetadata(diffID layer.DiffID) ([]V2Metadata, e
 	}
 
 	return metadata, nil
+}
+
+// LookupMetadata finds the metadata associated with a layer DiffID, but
+// unlike GetMetadata it tolerates absent or legacy metadata:
+//   - If no metadata is stored for the diffID (or there is no metadata
+//     storage at all), no entries and no error are returned.
+//   - Metadata written by older daemons in a legacy (single-entry) format
+//     is accepted.
+//   - Metadata that cannot be parsed in any known format is ignored.
+//
+// Other errors, such as permission denied when reading the metadata, are
+// returned to the caller.
+func (serv *v2MetadataService) LookupMetadata(diffID layer.DiffID) ([]V2Metadata, error) {
+	if serv.store == nil {
+		return nil, nil
+	}
+	jsonBytes, err := serv.store.Get(serv.diffIDNamespace(), serv.diffIDKey(diffID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var metadata []V2Metadata
+	if err := json.Unmarshal(jsonBytes, &metadata); err == nil {
+		return metadata, nil
+	}
+
+	// Older daemons wrote a single metadata entry rather than an array.
+	var legacy V2Metadata
+	if err := json.Unmarshal(jsonBytes, &legacy); err == nil && (legacy.Digest != "" || legacy.SourceRepository != "") {
+		return []V2Metadata{legacy}, nil
+	}
+
+	// Unknown or corrupt metadata format: ignore it. A read-only consumer
+	// must not fail just because the on-disk metadata is older than expected.
+	return nil, nil
 }
 
 // GetDiffID finds a layer DiffID from a digest.

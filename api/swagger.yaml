@@ -8208,6 +8208,60 @@ definitions:
           opts in via the `statement=true` query parameter; otherwise absent.
         type: "object"
         x-nullable: true
+  LayerMetadata:
+    x-go-name: "LayerMetadata"
+    description: |
+      LayerMetadata describes the locally stored metadata of a single image
+      layer as returned by the ImageLayers operation.
+
+      Entries are merged by compressed digest: a layer blob referenced from
+      multiple repositories (or through multiple metadata entries) is
+      reported once while every known source repository is preserved. The
+      export only reads local metadata; it never pulls missing layers or
+      modifies local images.
+    type: "object"
+    required: ["DiffID", "ChainID", "Available"]
+    properties:
+      Digest:
+        description: |
+          Compressed (distribution) digest of the layer blob.
+
+          Empty for layers that were never pulled from a registry, for
+          example layers built locally.
+        type: "string"
+      DiffID:
+        description: Digest of the uncompressed layer tar stream.
+        type: "string"
+      ChainID:
+        description: Content hash of the layer chain from the root to (and including) this layer.
+        type: "string"
+      Parent:
+        description: ChainID of the parent layer. Empty for the first (base) layer of an image.
+        type: "string"
+      MediaType:
+        description: |
+          Media type of the compressed layer blob as recorded when the layer
+          was pulled or loaded. Empty when the local image store does not
+          record it.
+        type: "string"
+      Created:
+        description: Layer creation time taken from the image history. Absent when unknown.
+        type: "string"
+        format: "dateTime"
+        x-nullable: true
+      SourceRepositories:
+        description: |
+          Sorted, de-duplicated list of all repositories from which the
+          layer blob is known to have been pulled. May be empty for layers
+          built locally.
+        type: "array"
+        items:
+          type: "string"
+      Available:
+        description: |
+          Whether the layer content is present in the local layer store. The
+          export does not pull layers that are missing locally.
+        type: "boolean"
   ImageManifestSummary:
     x-go-name: "ManifestSummary"
     description: |
@@ -10341,6 +10395,68 @@ paths:
             descriptor and predicate type are returned and statement blobs
             are not read.
           default: false
+          required: false
+      tags: ["Image"]
+  /images/{name}/layers:
+    get:
+      summary: "Export metadata of the layers of an image"
+      description: |
+        Export stable JSON describing the locally stored metadata of every
+        layer of the image for the given platform: the compressed digest,
+        the parent layer, the compressed media type, the layer creation
+        time, and the repositories the layers were pulled from.
+
+        The operation is strictly read-only: the daemon never pulls missing
+        layers and does not modify local images. Layers that share a
+        compressed digest are merged into a single entry while all of their
+        source-repository references are preserved. Layers whose content is
+        missing locally are still reported, with their `Available` field set
+        to false.
+      operationId: "ImageLayers"
+      produces:
+        - "application/json"
+      responses:
+        "200":
+          description: "No error"
+          schema:
+            type: "array"
+            items:
+              $ref: "#/definitions/LayerMetadata"
+        "400":
+          description: "Bad parameter (e.g. malformed `platform` value)"
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        "404":
+          description: "No such image, or no image found for the requested platform"
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        "500":
+          description: "Server error"
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+        "501":
+          description: |
+            The daemon's image backend does not support layer metadata
+            export. This is returned by the containerd image store, which
+            does not keep the graphdriver distribution metadata this
+            operation is based on.
+          schema:
+            $ref: "#/definitions/ErrorResponse"
+      parameters:
+        - name: "name"
+          in: "path"
+          description: "Image name or id"
+          type: "string"
+          required: true
+        - name: "platform"
+          type: "string"
+          in: "query"
+          description: |-
+            JSON-encoded OCI platform to select the image variant whose
+            layer metadata to export. If omitted, the daemon's default
+            (host) platform is used.
+
+            Example: `{"os": "linux", "architecture": "amd64"}`
           required: false
       tags: ["Image"]
   /images/{name}/history:

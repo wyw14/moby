@@ -577,6 +577,28 @@ func (ir *imageRouter) getImagesHistory(ctx context.Context, w http.ResponseWrit
 	return httputils.WriteJSON(w, http.StatusOK, history)
 }
 
+func (ir *imageRouter) getImageLayers(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+	if err := httputils.ParseForm(r); err != nil {
+		return err
+	}
+
+	var platform *ocispec.Platform
+	if formPlatform := r.Form.Get("platform"); formPlatform != "" {
+		p, err := httputils.DecodePlatform(formPlatform)
+		if err != nil {
+			return errdefs.InvalidParameter(err)
+		}
+		platform = p
+	}
+
+	layers, err := ir.backend.ImageLayerMetadata(ctx, vars["name"], platform)
+	if err != nil {
+		return err
+	}
+
+	return httputils.WriteJSON(w, http.StatusOK, layers)
+}
+
 func (ir *imageRouter) postImagesTag(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err

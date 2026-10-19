@@ -179,6 +179,16 @@ type DescribableStore interface {
 	RegisterWithDescriptor(io.Reader, ChainID, distribution.Descriptor) (Layer, error)
 }
 
+// DescriptorReadStore represents a layer store that persists the
+// distribution descriptor of a layer and allows it to be read back without
+// registering, downloading or otherwise mutating the layer.
+type DescriptorReadStore interface {
+	// Descriptor returns the distribution descriptor stored for the layer
+	// with the given ChainID. A zero descriptor without an error indicates
+	// that no descriptor is stored for the layer.
+	Descriptor(ChainID) (distribution.Descriptor, error)
+}
+
 // ReleaseAndLog releases the provided layer from the given layer
 // store, logging any error and release metadata
 func ReleaseAndLog(ls Store, l Layer) {
