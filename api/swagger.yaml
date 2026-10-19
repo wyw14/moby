@@ -8753,6 +8753,27 @@ paths:
             Specify as an integer or `all` to output all log lines.
           type: "string"
           default: "all"
+        - name: "max-bytes"
+          in: "query"
+          description: |
+            Limit the total amount of raw log content returned in a single
+            response. The budget counts only the raw content of the log
+            records selected by the other filters (`stdout`/`stderr`,
+            `since`, `until`, and `tail`), in their original order;
+            timestamps, details, and multiplexed stream headers are not
+            counted.
+
+            If returning the next record would exceed the budget, the
+            response ends without that record; records are not truncated,
+            and later records are not selected to make the record fit. When
+            following (`follow=true`), reaching the budget ends the response
+            and releases the underlying log reader.
+
+            A value of `0` (the default) does not limit the response;
+            negative values are rejected.
+          type: "integer"
+          format: "int64"
+          default: 0
       tags: ["Container"]
   /containers/{id}/changes:
     get:

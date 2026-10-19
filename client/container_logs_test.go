@@ -125,6 +125,24 @@ func TestContainerLogs(t *testing.T) {
 			},
 		},
 		{
+			doc: "max-bytes",
+			options: ContainerLogsOptions{
+				MaxBytes: 1024,
+			},
+			expectedQueryParams: map[string]string{
+				"max-bytes": "1024",
+			},
+		},
+		{
+			doc: "negative max-bytes is sent for the daemon to reject",
+			options: ContainerLogsOptions{
+				MaxBytes: -1,
+			},
+			expectedQueryParams: map[string]string{
+				"max-bytes": "-1",
+			},
+		},
+		{
 			doc: "invalid since",
 			options: ContainerLogsOptions{
 				// invalid dates are not passed.

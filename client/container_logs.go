@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/moby/moby/client/internal/timestamp"
@@ -20,6 +21,20 @@ type ContainerLogsOptions struct {
 	Follow     bool
 	Tail       string
 	Details    bool
+
+	// MaxBytes limits the total number of bytes of raw log-line content
+	// returned in a single response. Only the raw content of selected log
+	// records counts toward the budget; timestamps, details, and multiplexed
+	// stream headers do not.
+	//
+	// When the next log record would exceed the budget, the response ends
+	// without that record; records are not truncated, and later records are
+	// not skipped. When following, the connection is closed once the budget
+	// is reached.
+	//
+	// A value of 0 does not limit the response. Negative values are rejected
+	// by the daemon.
+	MaxBytes int64
 }
 
 // ContainerLogsResult is the result of a container logs operation.
@@ -92,6 +107,10 @@ func (cli *Client) ContainerLogs(ctx context.Context, containerID string, option
 
 	if options.Details {
 		query.Set("details", "1")
+	}
+
+	if options.MaxBytes != 0 {
+		query.Set("max-bytes", strconv.FormatInt(options.MaxBytes, 10))
 	}
 
 	if options.Follow {

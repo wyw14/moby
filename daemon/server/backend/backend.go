@@ -118,6 +118,21 @@ type ContainerLogsOptions struct {
 	Follow     bool
 	Tail       string
 	Details    bool
+
+	// MaxBytes is the maximum total number of bytes of raw log-line content
+	// returned in a single response, counted over the log records selected by
+	// the other filters (stream, since/until, and tail), in their original
+	// order. Only the raw content of a selected record counts toward the
+	// budget; timestamps, details, and multiplexed stream headers do not.
+	//
+	// When the next record would exceed the budget, the response ends without
+	// that record. Records are never truncated to fit, and later records are
+	// not skipped to fit the budget. When following, reaching the budget ends
+	// the response and releases the underlying log reader.
+	//
+	// A value of 0 does not limit the response. Negative values are rejected
+	// before the response is started.
+	MaxBytes int64
 }
 
 // ContainerStopOptions holds the options to stop or restart a container.

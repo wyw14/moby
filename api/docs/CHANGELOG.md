@@ -15,6 +15,17 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.57 API changes
 
+* `GET /containers/{id}/logs` now supports a `max-bytes` query parameter,
+  which limits the total amount of raw log content returned in a single
+  response. The budget counts only the raw content of the log records
+  selected by the `stdout`/`stderr`, `since`, `until`, and `tail` filters,
+  in their original order; timestamps, details, and multiplexed stream
+  headers are not counted. If the next record would exceed the budget, the
+  response ends without that record (records are not truncated, and later
+  records are not skipped). When following, the connection is closed once
+  the budget is reached. `0` (the default) does not limit the response;
+  negative values are rejected with an error before the response starts.
+
 ## v1.56 API changes
 
 * `GET /containers/json` now supports an `annotation` filter to filter

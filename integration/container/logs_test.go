@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 	"github.com/moby/moby/v2/daemon/logger/jsonfilelog"
@@ -182,10 +183,157 @@ func testLogs(t *testing.T, logDriver string) {
 
 // This hack strips the escape codes that appear in the Windows TTY output and don't have
 // any effect on the text content.
-// This doesn't handle all escape sequences, only ones that were encountered during testing.
+// This doesn't handle all escape codes, only those that were encountered during testing.
 func stripEscapeCodes(t *testing.T, input string) string {
 	t.Logf("Stripping: %q\n", input)
 	output, err := termtest.StripANSICommands(input)
 	assert.NilError(t, err)
 	return output
+}
+
+// TestLogsMaxBytes verifies the "max-bytes" response budget: after the
+// existing stream/since/until/tail filters, only the raw content of selected
+// records counts toward the budget, and a record that would exceed it ends
+// the response without truncating the record or selecting later records.
+func TestLogsMaxBytes(t *testing.T) {
+	for _, logDriver := range []string{local.Name, jsonfilelog.Name} {
+		t.Run("driver "+logDriver, func(t *testing.T) {
+			t.Run("non-tty", func(t *testing.T) {
+				t.Parallel()
+				ctx := setupTest(t)
+				apiClient := testEnv.APIClient()
+
+				// Raw record bodies are 1, 2, and 3 bytes.
+				id := container.Run(ctx, t, apiClient,
+					container.WithCmd("sh", "-c", "printf 'a\\nbb\\nccc\\n'"),
+					container.WithLogDriver(logDriver),
+					container.WithNetworkMode("none"),
+				)
+				defer apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+				poll.WaitOn(t, container.IsStopped(ctx, apiClient, id))
+
+				logs, err := apiClient.ContainerLogs(ctx, id, client.ContainerLogsOptions{
+					ShowStdout: true,
+					MaxBytes:   3,
+				})
+				assert.NilError(t, err)
+				defer logs.Close()
+
+				var stdout, stderr bytes.Buffer
+				_, err = stdcopy.StdCopy(&stdout, &stderr, logs)
+				assert.NilError(t, err)
+
+				// "a" (1) and "bb" (2) fit exactly; "ccc" (3) would exceed the
+				// budget and must not be returned or replaced by a later record.
+				assert.Equal(t, stdout.String(), "abb")
+				assert.Equal(t, stderr.String(), "")
+			})
+
+			t.Run("tty", func(t *testing.T) {
+				// A TTY post-processes newlines into CRLF, changing record
+				// sizes; only assert exact byte behavior on Linux.
+				skip.If(t, testEnv.DaemonInfo.OSType == "windows")
+				t.Parallel()
+				ctx := setupTest(t)
+				apiClient := testEnv.APIClient()
+
+				id := container.Run(ctx, t, apiClient,
+					container.WithCmd("sh", "-c", "printf 'a\\nbb\\n'"),
+					container.WithTty(true),
+					container.WithLogDriver(logDriver),
+					container.WithNetworkMode("none"),
+				)
+				defer apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+				poll.WaitOn(t, container.IsStopped(ctx, apiClient, id))
+
+				logs, err := apiClient.ContainerLogs(ctx, id, client.ContainerLogsOptions{
+					ShowStdout: true,
+					ShowStderr: true,
+					// TTY records are "a\r" (2) and "bb\r" (3).
+					MaxBytes: 2,
+				})
+				assert.NilError(t, err)
+				defer logs.Close()
+
+				out, err := io.ReadAll(logs)
+				assert.NilError(t, err)
+				assert.Equal(t, string(out), "a\r")
+			})
+
+			t.Run("negative value rejected", func(t *testing.T) {
+				t.Parallel()
+				ctx := setupTest(t)
+				apiClient := testEnv.APIClient()
+
+				id := container.Run(ctx, t, apiClient,
+					container.WithCmd("sh", "-c", "printf 'a\\n'"),
+					container.WithLogDriver(logDriver),
+					container.WithNetworkMode("none"),
+				)
+				defer apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+				poll.WaitOn(t, container.IsStopped(ctx, apiClient, id))
+
+				_, err := apiClient.ContainerLogs(ctx, id, client.ContainerLogsOptions{
+					ShowStdout: true,
+					MaxBytes:   -1,
+				})
+				assert.Check(t, is.ErrorType(err, cerrdefs.IsInvalidArgument))
+			})
+		})
+	}
+}
+
+// TestLogsFollowMaxBytes verifies that reaching the budget ends a following
+// response (the client sees EOF) and releases the underlying log reader.
+func TestLogsFollowMaxBytes(t *testing.T) {
+	skip.If(t, testEnv.IsRemoteDaemon)
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	for _, logDriver := range []string{local.Name, jsonfilelog.Name} {
+		t.Run("driver "+logDriver, func(t *testing.T) {
+			id := container.Run(ctx, t, apiClient,
+				container.WithCmd("sh", "-c", "printf 'a\\nbb\\n'; sleep 30"),
+				container.WithLogDriver(logDriver),
+				container.WithNetworkMode("none"),
+			)
+			defer apiClient.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+			poll.WaitOn(t, container.RunningStateFlagIs(ctx, apiClient, id, true))
+
+			logs, err := apiClient.ContainerLogs(ctx, id, client.ContainerLogsOptions{
+				ShowStdout: true,
+				Follow:     true,
+				MaxBytes:   1,
+			})
+			assert.NilError(t, err)
+			defer logs.Close()
+
+			type copyResult struct {
+				out string
+				err error
+			}
+			done := make(chan copyResult, 1)
+			go func() {
+				var stdout bytes.Buffer
+				_, err := stdcopy.StdCopy(&stdout, io.Discard, logs)
+				done <- copyResult{out: stdout.String(), err: err}
+			}()
+
+			// The response must end on its own once the budget is reached;
+			// without the budget the follower would block until the container
+			// is removed.
+			poll.WaitOn(t, func(log poll.LogT) poll.Result {
+				select {
+				case <-done:
+					return poll.Success()
+				default:
+					return poll.Continue("waiting for follow response to end at the byte budget")
+				}
+			}, poll.WithTimeout(15*time.Second))
+
+			r := <-done
+			assert.NilError(t, r.err)
+			assert.Equal(t, r.out, "a")
+		})
+	}
 }

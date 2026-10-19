@@ -19,6 +19,31 @@ import (
 // ensure the formatted time isalways the same number of characters.
 const rfc3339NanoFixed = "2006-01-02T15:04:05.000000000Z07:00"
 
+// byteBudget tracks the per-response budget of raw log-line bytes.
+//
+// Only the raw content of a selected log record counts toward the budget;
+// timestamps, details, and multiplexed stream headers are not counted.
+// A record that does not fit is not truncated: the caller must end the
+// response without writing it and without skipping ahead to later records.
+type byteBudget struct {
+	limit int64
+	used  int64
+}
+
+// take reports whether a record whose raw content is lineSize bytes fits
+// within the budget, accounting for it when it does. A non-positive limit
+// means the budget is unlimited.
+func (b *byteBudget) take(lineSize int) bool {
+	if b.limit <= 0 {
+		return true
+	}
+	if b.used+int64(lineSize) > b.limit {
+		return false
+	}
+	b.used += int64(lineSize)
+	return true
+}
+
 // Write writes an encoded byte stream of log messages from the
 // messages channel, multiplexing them with a stdcopy.Writer if mux is true
 func Write(ctx context.Context, w http.ResponseWriter, msgs <-chan *backend.LogMessage, config *backend.ContainerLogsOptions, mux bool) {
@@ -39,6 +64,8 @@ func Write(ctx context.Context, w http.ResponseWriter, msgs <-chan *backend.LogM
 		errStream = stdcopymux.NewStdWriter(outStream, stdcopy.Stderr)
 		outStream = stdcopymux.NewStdWriter(outStream, stdcopy.Stdout)
 	}
+
+	budget := byteBudget{limit: config.MaxBytes}
 
 	for {
 		select {
@@ -69,6 +96,12 @@ func Write(ctx context.Context, w http.ResponseWriter, msgs <-chan *backend.LogM
 			default:
 				// unknown source
 				continue
+			}
+
+			// End the response before writing a record that would exceed the
+			// budget; leave the record untouched and stop selecting records.
+			if !budget.take(len(msg.Line)) {
+				return
 			}
 
 			if !config.Timestamps && !config.Details {

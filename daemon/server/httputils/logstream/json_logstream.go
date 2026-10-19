@@ -23,6 +23,7 @@ func WriteJSON(ctx context.Context, w http.ResponseWriter, msgs <-chan *backend.
 	wf.Flush()
 
 	jsonWriter := newJSONLogWriter(wf, w.Header().Get("Content-Type"), config)
+	budget := byteBudget{limit: config.MaxBytes}
 	for {
 		select {
 		case <-ctx.Done():
@@ -38,16 +39,24 @@ func WriteJSON(ctx context.Context, w http.ResponseWriter, msgs <-chan *backend.
 			}
 			switch msg.Source {
 			case "stdout":
-				if config.ShowStdout {
-					jsonWriter.write(msg)
+				if !config.ShowStdout {
+					continue
 				}
 			case "stderr":
-				if config.ShowStderr {
-					jsonWriter.write(msg)
+				if !config.ShowStderr {
+					continue
 				}
 			default:
 				// unknown source
+				continue
 			}
+
+			// End the response before writing a record that would exceed the
+			// budget; leave the record untouched and stop selecting records.
+			if !budget.take(len(msg.Line)) {
+				return
+			}
+			jsonWriter.write(msg)
 		}
 	}
 }

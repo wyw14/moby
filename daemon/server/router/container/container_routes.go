@@ -222,6 +222,18 @@ func (c *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 		}
 	}
 
+	var maxBytes int64
+	if v := r.Form.Get("max-bytes"); v != "" {
+		var err error
+		maxBytes, err = strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return errdefs.InvalidParameter(fmt.Errorf(`invalid value for "max-bytes": %w`, err))
+		}
+		if maxBytes < 0 {
+			return errdefs.InvalidParameter(fmt.Errorf(`invalid value for "max-bytes": value must be zero or greater, got %d`, maxBytes))
+		}
+	}
+
 	var logFormat string
 	// TODO(thaJeztah): this is currently experimental; there is no implementation
 	// for this feature yet in the client, and the response struct is not yet part
@@ -249,6 +261,7 @@ func (c *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 		ShowStdout: stdout,
 		ShowStderr: stderr,
 		Details:    httputils.BoolValue(r, "details"),
+		MaxBytes:   maxBytes,
 	}
 
 	msgs, tty, err := c.backend.ContainerLogs(ctx, containerName, logsConfig)
