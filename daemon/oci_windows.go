@@ -35,6 +35,14 @@ func (daemon *Daemon) setupContainerDirs(c *container.Container) ([]container.Mo
 	// Note, unlike Unix, we do NOT call into SetupWorkingDirectory as
 	// this is done in VMCompute. Further, we couldn't do it for Hyper-V
 	// containers anyway.
+
+	// Validate the secret/config references before creating anything on
+	// disk. This must run first so that an invalid reference cannot leave
+	// partially created mounts or directories behind.
+	if err := c.ValidateSecretConfigReferences(); err != nil {
+		return nil, errdefs.InvalidParameter(err)
+	}
+
 	if err := daemon.setupSecretDir(c); err != nil {
 		return nil, err
 	}

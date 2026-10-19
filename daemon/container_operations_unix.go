@@ -191,6 +191,13 @@ func (daemon *Daemon) getPIDContainer(id string) (*container.Container, error) {
 
 // setupContainerDirs sets up base container directories (root, ipc, tmpfs and secrets).
 func (daemon *Daemon) setupContainerDirs(ctr *container.Container) (_ []container.Mount, err error) {
+	// Validate the secret/config references before creating anything on
+	// disk. This must run first so that an invalid reference cannot leave
+	// partially created mounts or directories behind.
+	if err := ctr.ValidateSecretConfigReferences(); err != nil {
+		return nil, errdefs.InvalidParameter(err)
+	}
+
 	if err := daemon.setupContainerMountsRoot(ctr); err != nil {
 		return nil, err
 	}
